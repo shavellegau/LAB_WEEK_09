@@ -6,7 +6,10 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,12 +35,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 
-// Pastikan imports untuk Custom UI Elements sudah ada:
+// --- Moshi Imports ---
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.JsonAdapter // Import tambahan untuk tipe eksplisit
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+
 import com.example.lab_week_09.ui.theme.LAB_WEEK_09Theme
 import com.example.lab_week_09.ui.theme.OnBackgroundItemText
 import com.example.lab_week_09.ui.theme.OnBackgroundTitleText
 import com.example.lab_week_09.ui.theme.PrimaryTextButton
-// import com.example.lab_week_09.R
 
 
 // Data Model
@@ -45,13 +52,12 @@ data class Student(
     var name: String
 )
 
-// MainActivity Class
+// --- MainActivity Class ---
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             LAB_WEEK_09Theme {
-                // 5. Update Surface to use App()
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -66,30 +72,26 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// 4. Root Composable: App (Nav Host)
+// --- Root Composable: App (Nav Host) ---
 @Composable
 fun App(navController: NavHostController) {
-    // NavHost creates a navigation graph
     NavHost(
         navController = navController,
         startDestination = "home"
     ) {
-        // Route "home"
         composable("home") {
-            // Pass navigation lambda to Home Composable
             Home { listDataString ->
                 navController.navigate("resultContent/?listData=$listDataString")
             }
         }
 
-        // Route "resultContent" with arguments
         composable(
             "resultContent/?listData={listData}",
             arguments = listOf(navArgument("listData") {
                 type = NavType.StringType
+                defaultValue = "[]"
             })
         ) { backStackEntry ->
-            // Pass the value of the argument to the ResultContent composable
             ResultContent(
                 listData = backStackEntry.arguments?.getString("listData").orEmpty()
             )
@@ -97,10 +99,10 @@ fun App(navController: NavHostController) {
     }
 }
 
-// 6. Home Composable (State Holder & Navigation Logic)
+// --- Parent Composable: Home (State Holder & Serialization) ---
 @Composable
 fun Home(
-    navigateFromHomeToResult: (String) -> Unit // New parameter for navigation
+    navigateFromHomeToResult: (String) -> Unit
 ) {
     val listData = remember {
         mutableStateListOf(
@@ -112,17 +114,22 @@ fun Home(
 
     var inputField = remember { mutableStateOf(Student("")) }
 
-    // 8. Update HomeContent calling function
+    // Moshi setup for serialization (converting List<Student> to JSON)
+    val moshi = remember { Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build() }
+    val type = remember { Types.newParameterizedType(List::class.java, Student::class.java) }
+
+    // FIX 1: Tentukan tipe eksplisit untuk adapter
+    val adapter: JsonAdapter<List<Student>> = remember { moshi.adapter(type) }
+
     HomeContent(
         listData = listData,
         inputField = inputField.value,
 
-        // Event: Update input field
         onInputValueChange = { input ->
             inputField.value = inputField.value.copy(name = input)
         },
 
-        // Event: Add item and reset input
+        // Input Validation (ensures empty strings are not added)
         onButtonClick = {
             if (inputField.value.name.isNotBlank()) {
                 listData.add(inputField.value.copy())
@@ -130,22 +137,22 @@ fun Home(
             }
         },
 
-        // Event: Navigate, converting listData to String before passing
+        // Logic Navigasi: Serialize List to JSON
         navigateFromHomeToResult = {
-            // Convert List<Student> to a single String representation
-            navigateFromHomeToResult(listData.toList().toString())
+            val jsonString = adapter.toJson(listData.toList())
+            navigateFromHomeToResult(jsonString)
         }
     )
 }
 
-// 7. & 9. Child Composable: HomeContent (UI Renderer with new button)
+// --- Child Composable: HomeContent (UI Renderer) ---
 @Composable
 fun HomeContent(
     listData: SnapshotStateList<Student>,
     inputField: Student,
     onInputValueChange: (String) -> Unit,
     onButtonClick: () -> Unit,
-    navigateFromHomeToResult: () -> Unit // New parameter for navigation
+    navigateFromHomeToResult: () -> Unit
 ) {
     LazyColumn {
         item {
@@ -170,7 +177,6 @@ fun HomeContent(
                     }
                 )
 
-                // --- New: Row containing two buttons ---
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -178,21 +184,18 @@ fun HomeContent(
                     PrimaryTextButton(text = stringResource(id = R.string.button_click)) {
                         onButtonClick()
                     }
-                    // New Finish/Navigate Button
                     PrimaryTextButton(text = stringResource(id = R.string.button_navigate)) {
                         navigateFromHomeToResult()
                     }
                 }
-                // --- End Row ---
             }
         }
 
-        // Display list items lazily
         items(listData) { item ->
             Column(
                 modifier = Modifier
                     .padding(vertical = 4.dp)
-                    .fillMaxSize(),
+                    .fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 OnBackgroundItemText(text = item.name)
@@ -202,24 +205,57 @@ fun HomeContent(
 }
 
 
-// 10. Result Content Composable
+// --- Result Content Composable (Deserialization & Display) ---
 @Composable
 fun ResultContent(listData: String) {
-    Column(
+    val moshi = remember { Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build() }
+    val type = remember { Types.newParameterizedType(List::class.java, Student::class.java) }
+    val adapter: JsonAdapter<List<Student>> = remember { moshi.adapter(type) }
+
+    val studentList: List<Student> = remember(listData) {
+        try {
+            if (listData.isNotEmpty() && listData != "null" && listData != "[]") {
+                adapter.fromJson(listData) ?: emptyList()
+            } else emptyList()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    LazyColumn(
         modifier = Modifier
-            .padding(16.dp) // Tambahkan padding untuk estetika
-            .fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center // Posisi di tengah layar
+            .padding(16.dp)
+            .fillMaxSize()
     ) {
-        // Tampilkan data yang diterima dari navigasi
-        OnBackgroundTitleText(text = "Daftar Item Diterima:")
-        OnBackgroundItemText(text = listData)
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                OnBackgroundTitleText(text = "Daftar Item Diterima:")
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        items(studentList) { student ->
+            Column(
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                OnBackgroundItemText(text = student.name)
+            }
+        }
+
+        if (studentList.isEmpty()) {
+            item {
+                OnBackgroundItemText(text = "Tidak ada data yang dikirim atau data kosong.")
+            }
+        }
     }
 }
 
 
-// Preview Composable (Updated to reflect HomeContent's new signature)
+// --- Preview Composable ---
 @Preview(showBackground = true)
 @Composable
 fun PreviewHome() {
@@ -229,7 +265,7 @@ fun PreviewHome() {
             inputField = Student(""),
             onInputValueChange = {},
             onButtonClick = {},
-            navigateFromHomeToResult = {} // Dummy function for preview
+            navigateFromHomeToResult = {}
         )
     }
 }
